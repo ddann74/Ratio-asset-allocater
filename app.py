@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 
 # 1. Configuration & Thresholds
+# Note: As per your request, we use these to determine "Buy Zones"
 BUY_ZONES = {
     "Silver": 80.0,    # Buy when Ratio is >= 80
     "S&P 500": 1.0,    # Buy when Ratio is <= 1.0
@@ -51,17 +52,18 @@ for i, (name, ticker) in enumerate(tickers.items()):
         
         # --- FIX FOR LINE 43 ERROR ---
         # We extract the latest value and the average as single floats
+        # .iloc[-1] gets the most recent data point
         curr = float(ratios_series.iloc[-1])
         avg = float(ratios_series.mean())
         
-        # Data Stabilization Logic (Your requested feature)
-        # Checks if current price is within 2% of the 5-day average
+        # 4. Data Stabilization Indicator (Added as requested 2026-02-07)
+        # Checks if current ratio is within 2% of the 5-day average
         diff = abs(curr - avg) / avg
         stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
         
         is_buy, bg_color = get_status_styles(name, curr, stability_label)
 
-        # 4. Display the results in themed cards
+        # 5. Display results in themed cards
         with cols[i]:
             st.markdown(f"""
                 <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
@@ -76,8 +78,8 @@ for i, (name, ticker) in enumerate(tickers.items()):
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
-            st.caption("Data unavailable")
+            st.caption("Check ticker symbol or connection.")
 
-# 5. Footer
+# 6. Footer
 st.divider()
-st.caption("Auto-updating via GitHub & Streamlit Cloud. Logic includes Data Stabilization indicators.")
+st.caption("Auto-updating via GitHub & Streamlit Cloud. Includes Data Stabilization logic.")
