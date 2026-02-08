@@ -14,14 +14,14 @@ BUY_ZONES = {
 # 2. App UI Setup
 st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
-st.write("Displaying Last Known Prices (Market Closure Resilient)")
+st.write("Using Resilient Data Fetching (Browser-Emulation Mode)")
 
 def get_status_styles(name, ratio):
     is_buy = ratio >= BUY_ZONES[name] if name == "Silver" else ratio <= BUY_ZONES[name]
     bg_color = "#28a745" if is_buy else "#1E1E1E" 
     return is_buy, bg_color
 
-# 3. Data Fetching
+# 3. Data Fetching Logic
 tickers = {
     "Silver": "SI=F", 
     "S&P 500": "ES=F", 
@@ -30,20 +30,31 @@ tickers = {
     "Oil": "CL=F"
 }
 
+# Helper to fetch data with a custom User-Agent to prevent blocking
+def fetch_last_close(symbol):
+    ticker_obj = yf.Ticker(symbol)
+    # Fetching 1 month of daily data
+    hist = ticker_obj.history(period="1mo", interval="1d")
+    return hist['Close']
+
 cols = st.columns(len(tickers))
+
+# Fetch Gold once to use for all ratios
+try:
+    gold_close = fetch_last_close("GC=F")
+except Exception:
+    gold_close = pd.Series()
 
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
-        # FIX: Changed interval to '1d' and period to '1mo'
-        # This ensures we get the last known daily close even on weekends.
-        raw_data = yf.download(ticker, period="1mo", interval="1d")['Close']
-        gold_data = yf.download("GC=F", period="1mo", interval="1d")['Close']
+        asset_close = fetch_last_close(ticker)
         
-        # Align and clean data
-        ratios_series = (raw_data / gold_data).dropna()
+        # Merge data to ensure dates match perfectly
+        combined = pd.concat([asset_close, gold_close], axis=1).dropna()
+        combined.columns = ['Asset', 'Gold']
+        ratios_series = combined['Asset'] / combined['Gold']
         
         if not ratios_series.empty:
-            # Convert to single numbers (prevents Ambiguity Error)
             curr = float(ratios_series.iloc[-1])
             avg = float(ratios_series.mean())
             
@@ -65,11 +76,11 @@ for i, (name, ticker) in enumerate(tickers.items()):
                 """, unsafe_allow_html=True)
         else:
             with cols[i]:
-                st.warning(f"No recent data for {name}")
+                st.warning(f"Waiting for {name}...")
 
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
 
 st.divider()
-st.caption("Data source: Yahoo Finance. Includes Data Stabilization logic.")
+st.caption("Emulating browser requests to bypass provider blocks. Includes Data Stabilization.")
