@@ -6,7 +6,7 @@ from datetime import datetime
 
 st.set_page_config(page_title="Ratio Asset Allocator", layout="wide")
 
-# 1. Robust Data Fetching & Preparation
+# 1. Robust Data Fetching
 @st.cache_data(ttl=3600)
 def fetch_all_data():
     tickers = {
@@ -21,20 +21,17 @@ def fetch_all_data():
     
     for name, sym in tickers.items():
         try:
-            # Fetching 30Y of monthly data
             df = yf.download(sym, period="30y", interval="1mo", progress=False)
             if not df.empty:
-                # Use ['Close'] and ensure it's a Series for pd.concat
                 data_dict[name] = df['Close']
-        except Exception as e:
-            st.sidebar.error(f"Error loading {name}: {e}")
+        except Exception:
             continue
     
     if not data_dict:
-        st.error("No data could be retrieved. Check your connection.")
+        st.error("No data retrieved. Please check your connection.")
         return pd.DataFrame()
 
-    # pd.concat handles the 'scalar value' error by aligning dates automatically
+    # Align dates and drop missing values
     final_df = pd.concat(data_dict.values(), axis=1, keys=data_dict.keys())
     return final_df.dropna()
 
@@ -45,14 +42,15 @@ if full_history.empty:
 
 # 2. Simulation Slider
 st.sidebar.header("🕹️ Simulation Suite")
+# Start index at 13 to ensure we always have at least 12 months for stabilization calc
 sim_index = st.sidebar.slider(
     "Backtest Date (Last 30 Years)", 
-    min_value=12, # Min 12 months for stabilization calculation
+    min_value=13, 
     max_value=len(full_history)-1, 
     value=len(full_history)-1
 )
 
-# Filter history to simulate 'being at that time'
+# Filter history for simulation
 current_history = full_history.iloc[:sim_index + 1]
 as_of_date = current_history.index[-1].strftime('%B %Y')
 gold_price = float(current_history['Gold'].iloc[-1])
@@ -60,24 +58,31 @@ gold_price = float(current_history['Gold'].iloc[-1])
 st.title("🚨 Dynamic Extreme Value Command Center")
 st.subheader(f"Simulation Mode: {as_of_date} | Gold: ${gold_price:,.2f}")
 
-# 3. Calculation Logic
+# 3. Logic & Calculations
 tickers_map = {"Silver": "SI=F", "S&P 500": "ES=F", "Dow Jones": "YM=F", "Miners": "GDXJ", "Oil": "CL=F"}
 tv_map = {"Silver": "OANDA:XAGUSD", "S&P 500": "CME_MINI:ES1!", "Dow Jones": "CBOT:YM1!", "Miners": "AMEX:GDXJ", "Oil": "NYMEX:CL1!"}
 
 asset_list = []
 for name in tickers_map.keys():
-    # Ratio calculation
     if name == "Silver":
         ratios = current_history['Gold'] / current_history['Silver']
     else:
         ratios = current_history[name] / current_history['Gold']
     
     ratios = ratios.dropna()
+    
+    # SAFETY CHECK: Ensure we have enough data points for the asset at this time
+    if len(ratios) < 2:
+        continue
+
     curr = float(ratios.iloc[-1])
+    prev = float(ratios.iloc[-2]) # This was causing the IndexError
     hist_max, hist_min = float(ratios.max()), float(ratios.min())
     
-    # Trend & Stability [2026-02-07 instruction]
-    trend_arrow = "↑" if curr > float(ratios.iloc[-2]) else "↓"
+    # Trend Calculation
+    trend_arrow = "↑" if curr > prev else "↓"
+    
+    # Stabilization [2026-02-07 instruction]
     avg_12m = float(ratios.tail(12).mean())
     stability_status = "🟢 Stable" if (abs(curr - avg_12m) / avg_12m) < 0.05 else "🔴 Volatile"
     
@@ -103,6 +108,7 @@ cols = st.columns(len(sorted_assets))
 for i, asset in enumerate(sorted_assets):
     name, ratios, curr, t = asset['name'], asset['ratios'], asset['curr'], asset['thresholds']
     
+    # Signal Logic
     if name == "Silver":
         if curr >= t['ex_buy']: bg, label = "#004d00", "💎 GENERATIONAL BUY"
         elif curr >= t['buy']: bg, label = "#1e4620", "🔥 BUY SIGNAL"
@@ -114,7 +120,6 @@ for i, asset in enumerate(sorted_assets):
         elif curr >= t['ex_sell']: bg, label = "#900C3F", "⚠️ EXTREME SELL"
         else: bg, label = "#1E1E1E", "⏳ HOLD"
 
-    # Safe formatting to avoid ValueError
     val_str = f"{curr:.2f}" if name in ["Silver", "S&P 500", "Dow Jones"] else f"{curr:.4f}"
     
     with cols[i]:
