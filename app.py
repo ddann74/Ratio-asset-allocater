@@ -42,39 +42,42 @@ cols = st.columns(len(tickers))
 
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
-        # Fetching 5 days of hourly data for stabilization check
+        # Fetching 5 days of hourly data
         # We download both the asset and Gold (GC=F) to calculate the ratio
         raw_data = yf.download(ticker, period="5d", interval="1h")['Close']
         gold_data = yf.download("GC=F", period="5d", interval="1h")['Close']
         
-        # Create the ratio series
-        ratios_series = raw_data / gold_data
+        # Create the ratio series and drop any missing/NaN values for safety
+        ratios_series = (raw_data / gold_data).dropna()
         
-        # --- FIX FOR VALUE ERROR ---
-        # We extract the latest value and the 5-day average as single floats
-        # This prevents the "Series is ambiguous" crash
-        curr = float(ratios_series.iloc[-1])
-        avg = float(ratios_series.mean())
-        
-        # 4. Data Stabilization Indicator (Added as requested 2026-02-07)
-        # Checks if current ratio is within 2% of the 5-day average
-        diff = abs(curr - avg) / avg
-        stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
-        
-        is_buy, bg_color = get_status_styles(name, curr)
-
-        # 5. Display results in themed cards
-        with cols[i]:
-            st.markdown(f"""
-                <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
-                    <h4 style="margin:0; color:#bbb;">{name}</h4>
-                    <h2 style="margin:10px 0;">{curr:.4f}</h2>
-                    <p style="margin:0; font-size:0.9em;">{stability_label}</p>
-                    <p style="margin:0; font-size:0.8em; color:#888;">Variance: {diff:.2%}</p>
-                    {f"<div style='margin-top:10px; padding:5px; border:1px solid white; text-align:center; font-weight:bold;'>🔥 BUY SIGNAL</div>" if is_buy else ""}
-                </div>
-            """, unsafe_allow_html=True)
+        if not ratios_series.empty:
+            # --- RESOLVING AMBIGUITY ERROR ---
+            # We explicitly extract single float values (scalars)
+            curr = float(ratios_series.iloc[-1])
+            avg = float(ratios_series.mean())
             
+            # 4. Data Stabilization Indicator (Added as requested 2026-02-07)
+            # Checks if current ratio is within 2% of the 5-day average
+            diff = abs(curr - avg) / avg
+            stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
+            
+            is_buy, bg_color = get_status_styles(name, curr)
+
+            # 5. Display results in themed cards
+            with cols[i]:
+                st.markdown(f"""
+                    <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
+                        <h4 style="margin:0; color:#bbb;">{name}</h4>
+                        <h2 style="margin:10px 0;">{curr:.4f}</h2>
+                        <p style="margin:0; font-size:0.9em;">{stability_label}</p>
+                        <p style="margin:0; font-size:0.8em; color:#888;">Variance: {diff:.2%}</p>
+                        {f"<div style='margin-top:10px; padding:5px; border:1px solid white; text-align:center; font-weight:bold;'>🔥 BUY SIGNAL</div>" if is_buy else ""}
+                    </div>
+                """, unsafe_allow_html=True)
+        else:
+            with cols[i]:
+                st.warning(f"No data for {name}")
+
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
