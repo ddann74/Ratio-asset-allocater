@@ -6,7 +6,7 @@ from datetime import datetime
 
 st.set_page_config(page_title="Ratio Asset Allocator", layout="wide")
 
-# 1. Robust Data Fetching & Cleaning
+# 1. Robust Data Fetching & Alignment
 @st.cache_data(ttl=3600)
 def fetch_all_data():
     tickers = {
@@ -21,54 +21,49 @@ def fetch_all_data():
     
     for name, sym in tickers.items():
         try:
-            # Monthly data for the last 30 years
             df = yf.download(sym, period="30y", interval="1mo", progress=False)
             if not df.empty:
-                # Use ['Close'] and ensure it's a Series for safe concatenation
-                data_dict[name] = df['Close']
+                # Ensure we handle the data as a Series for safe concatenation
+                data_dict[name] = df['Close'].squeeze()
         except Exception:
             continue
     
     if not data_dict:
         return pd.DataFrame()
 
-    # pd.concat handles the "scalar value" error by aligning dates automatically
+    # Align dates and drop missing values across all assets
     final_df = pd.concat(data_dict.values(), axis=1, keys=data_dict.keys())
     return final_df.dropna()
 
 full_history = fetch_all_data()
 
-# Safety check for empty data
 if full_history.empty:
-    st.error("❌ Unable to fetch market data. Please check your internet connection or try again later.")
+    st.error("No data retrieved. Please check your internet connection.")
     st.stop()
 
-# 2. Sidebar Simulation Slider
+# 2. Simulation Suite
 st.sidebar.header("🕹️ Simulation Suite")
-# Start at index 13 to ensure we always have 12 months of data for stabilization calc
+# Start index at 13 to ensure a 12-month stabilization window exists
 sim_index = st.sidebar.slider(
     "Backtest Date (Last 30 Years)", 
     min_value=13, 
     max_value=len(full_history)-1, 
-    value=len(full_history)-1,
-    help="Slide to travel back in time. All ratios and signals will recalculate based on data available at that time."
+    value=len(full_history)-1
 )
 
-# Filter history based on slider position
 current_history = full_history.iloc[:sim_index + 1]
 as_of_date = current_history.index[-1].strftime('%B %Y')
 gold_price = float(current_history['Gold'].iloc[-1])
 
 st.title("🚨 Dynamic Extreme Value Command Center")
-st.subheader(f"Current Simulation: {as_of_date} | Gold: ${gold_price:,.2f}")
+st.subheader(f"Simulation Mode: {as_of_date} | Gold: ${gold_price:,.2f}")
 
-# 3. Calculation & Signal Logic
+# 3. Ratio Calculations & Logic
 tickers_map = {"Silver": "SI=F", "S&P 500": "ES=F", "Dow Jones": "YM=F", "Miners": "GDXJ", "Oil": "CL=F"}
 tv_map = {"Silver": "OANDA:XAGUSD", "S&P 500": "CME_MINI:ES1!", "Dow Jones": "CBOT:YM1!", "Miners": "AMEX:GDXJ", "Oil": "NYMEX:CL1!"}
 
 asset_list = []
 for name in tickers_map.keys():
-    # Calculate Ratios
     if name == "Silver":
         ratios = current_history['Gold'] / current_history['Silver']
     else:
@@ -76,7 +71,7 @@ for name in tickers_map.keys():
     
     ratios = ratios.dropna()
     
-    # SAFETY CHECK: Prevent IndexError (single positional indexer out-of-bounds)
+    # SAFETY CHECK: Fixes IndexError: single positional indexer is out-of-bounds
     if len(ratios) < 2:
         continue
 
@@ -84,12 +79,12 @@ for name in tickers_map.keys():
     prev = float(ratios.iloc[-2])
     hist_max, hist_min = float(ratios.max()), float(ratios.min())
     
-    # Trend and Data Stabilization [2026-02-07 instruction]
+    # Trend and Stabilization Indicator [2026-02-07 instruction]
     trend_arrow = "↑" if curr > prev else "↓"
     avg_12m = float(ratios.tail(12).mean())
     stability_status = "🟢 Stable" if (abs(curr - avg_12m) / avg_12m) < 0.05 else "🔴 Volatile"
     
-    # Dynamic Scoring & Signal Thresholds
+    # Signal Scoring
     if name == "Silver":
         ex_buy, reg_buy, ex_sell = hist_max * 0.90, hist_max * 0.80, hist_min * 1.10
         score = curr / hist_max 
@@ -103,17 +98,17 @@ for name in tickers_map.keys():
         "thresholds": {"ex_buy": ex_buy, "buy": reg_buy, "ex_sell": ex_sell}
     })
 
-# Sort: Best Value (highest score) on the left
 sorted_assets = sorted(asset_list, key=lambda x: x['score'], reverse=True)
 
-# 4. Grid Display (Safety check for st.columns)
+# 4. Grid Display
+# SAFETY CHECK: Only create columns if assets exist to avoid StreamlitInvalidColumnSpecError
 if sorted_assets:
     cols = st.columns(len(sorted_assets))
 
     for i, asset in enumerate(sorted_assets):
         name, ratios, curr, t = asset['name'], asset['ratios'], asset['curr'], asset['thresholds']
         
-        # UI Styling Logic
+        # Signal Categorization
         if name == "Silver":
             if curr >= t['ex_buy']: bg, label = "#004d00", "💎 GENERATIONAL BUY"
             elif curr >= t['buy']: bg, label = "#1e4620", "🔥 BUY SIGNAL"
@@ -136,8 +131,8 @@ if sorted_assets:
                 </div>
                 <div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:5px; font-size:0.75em;">
                     <div style="display:flex; justify-content:space-between;"><span>Stabilization:</span><b>{asset['stability']}</b></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Historical Max:</span><b>{asset['max']:.2f}</b></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Historical Min:</span><b>{asset['min']:.2f}</b></div>
+                    <div style="display:flex; justify-content:space-between;"><span>30Y Max:</span><b>{asset['max']:.2f}</b></div>
+                    <div style="display:flex; justify-content:space-between;"><span>30Y Min:</span><b>{asset['min']:.2f}</b></div>
                 </div>
                 <div style="text-align:center; padding:10px; border:2px solid white; font-weight:bold; border-radius:5px; background:rgba(255,255,255,0.1);">
                     {label}
@@ -156,4 +151,4 @@ if sorted_assets:
                 fig.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="white"))
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 else:
-    st.warning("⚠️ Waiting for asset data to load...")
+    st.info("No assets currently meet the data requirements for display.")
