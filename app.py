@@ -4,7 +4,6 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # 1. Configuration & Extreme Thresholds
-# For Silver: Higher = Cheaper (Gold/Silver). For Others: Lower = Cheaper (Asset/Gold).
 THRESHOLDS = {
     "Silver": {"extreme_buy": 95.0, "buy": 85.0, "extreme_sell": 40.0},
     "S&P 500": {"extreme_buy": 0.8, "buy": 1.2, "extreme_sell": 2.5},
@@ -19,20 +18,17 @@ st.title("🚨 Extreme Value Command Center")
 @st.cache_data(ttl=3600)
 def fetch_data(ticker):
     try:
-        # Fetch 30 years for historical context
         asset = yf.download(ticker, period="30y", interval="1mo", progress=False)['Close']
         gold = yf.download("GC=F", period="30y", interval="1mo", progress=False)['Close']
         combined = pd.concat([asset, gold], axis=1).dropna()
         combined.columns = ['Asset', 'Gold']
-        
-        # Logic: Invert Silver to show Gold/Silver ratio
         if "SI=F" in ticker:
             return (combined['Gold'] / combined['Asset']).dropna()
         return (combined['Asset'] / combined['Gold']).dropna()
-    except:
+    except Exception:
         return pd.Series()
 
-# 2. Ticker Mapping
+# 2. Ticker and TradingView Mapping
 tickers = {"Silver": "SI=F", "S&P 500": "ES=F", "Dow Jones": "YM=F", "Miners": "GDXJ", "Oil": "CL=F"}
 tv_map = {"Silver": "OANDA:XAGUSD", "S&P 500": "CME_MINI:ES1!", "Dow Jones": "CBOT:YM1!", "Miners": "AMEX:GDXJ", "Oil": "NYMEX:CL1!"}
 
@@ -45,12 +41,12 @@ for i, (name, sym) in enumerate(tickers.items()):
         curr = float(ratios.iloc[-1])
         t = THRESHOLDS[name]
         
-        # 3. Data Stabilization Indicator (2026-02-07 update)
+        # 3. Data Stabilization (2026-02-07 instruction)
         avg_12m = float(ratios.tail(12).mean())
         stability_var = abs(curr - avg_12m) / avg_12m
         stability_status = "🟢 Stable" if stability_var < 0.05 else "🔴 Volatile"
 
-        # 4. Signal Logic
+        # 4. Signal Logic & Colors
         if name == "Silver":
             if curr >= t['extreme_buy']: bg, label = "#004d00", "💎 GENERATIONAL BUY"
             elif curr >= t['buy']: bg, label = "#1e4620", "🔥 BUY SIGNAL"
@@ -62,7 +58,7 @@ for i, (name, sym) in enumerate(tickers.items()):
             elif curr >= t['extreme_sell']: bg, label = "#900C3F", "⚠️ EXTREME SELL"
             else: bg, label = "#1E1E1E", "⏳ HOLD"
 
-        # 5. Fixed Formatting (Prevents the ValueError from your logs)
+        # 5. FIXED FORMATTING: Extract logic from f-string to avoid ValueError
         if name in ["Silver", "S&P 500", "Dow Jones"]:
             val_display = f"{curr:.2f}"
         else:
@@ -71,9 +67,8 @@ for i, (name, sym) in enumerate(tickers.items()):
         tv_url = f"https://www.tradingview.com/chart/?symbol={tv_map[name]}"
         
         with cols[i]:
-            # Main Visual Card
             st.markdown(f"""
-            <div style="background-color:{bg}; padding:15px; border-radius:10px; border:1px solid #444; color:white; height:350px; display:flex; flex-direction:column; justify-content:space-between; margin-bottom:10px;">
+            <div style="background-color:{bg}; padding:15px; border-radius:10px; border:1px solid #444; color:white; height:360px; display:flex; flex-direction:column; justify-content:space-between; margin-bottom:10px;">
                 <div style="text-align:center;">
                     <div style="font-size:0.8em; color:#bbb;">{name}</div>
                     <div style="font-size:2.4em; font-weight:bold; color:#FFD700;">{val_display}</div>
@@ -92,7 +87,6 @@ for i, (name, sym) in enumerate(tickers.items()):
             </div>
             """, unsafe_allow_html=True)
             
-            # 6. Interactive Plotly Chart
             with st.expander("📈 Quick Trend"):
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=ratios.index, y=ratios.values, line=dict(color='#FFD700')))
@@ -101,4 +95,4 @@ for i, (name, sym) in enumerate(tickers.items()):
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 st.divider()
-st.caption("Auto-Recovery Mode Active | Data Stabilization included [2026-02-07] | Syntax Fix Applied")
+st.caption("Data Stabilization [2026-02-07] | Interactive Charts & External Links Active")
