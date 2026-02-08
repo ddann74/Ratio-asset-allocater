@@ -14,14 +14,14 @@ BUY_ZONES = {
 # 2. App UI Setup
 st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
-st.write("Using Resilient Data Fetching (Browser-Emulation Mode)")
+st.write("30-Year Historical Analysis & Data Stabilization")
 
 def get_status_styles(name, ratio):
     is_buy = ratio >= BUY_ZONES[name] if name == "Silver" else ratio <= BUY_ZONES[name]
     bg_color = "#28a745" if is_buy else "#1E1E1E" 
     return is_buy, bg_color
 
-# 3. Data Fetching Logic
+# 3. Enhanced Data Fetching
 tickers = {
     "Silver": "SI=F", 
     "S&P 500": "ES=F", 
@@ -30,57 +30,54 @@ tickers = {
     "Oil": "CL=F"
 }
 
-# Helper to fetch data with a custom User-Agent to prevent blocking
-def fetch_last_close(symbol):
-    ticker_obj = yf.Ticker(symbol)
-    # Fetching 1 month of daily data
-    hist = ticker_obj.history(period="1mo", interval="1d")
-    return hist['Close']
+@st.cache_data(ttl=3600) # Cache for 1 hour to prevent API blocks
+def fetch_historical_ratios(ticker, gold_ticker="GC=F"):
+    # Fetch 30 years of monthly data for historical context
+    asset = yf.Ticker(ticker).history(period="30y", interval="1mo")['Close']
+    gold = yf.Ticker(gold_ticker).history(period="30y", interval="1mo")['Close']
+    
+    # Align and calculate
+    combined = pd.concat([asset, gold], axis=1).dropna()
+    combined.columns = ['Asset', 'Gold']
+    return combined['Asset'] / combined['Gold']
 
 cols = st.columns(len(tickers))
 
-# Fetch Gold once to use for all ratios
-try:
-    gold_close = fetch_last_close("GC=F")
-except Exception:
-    gold_close = pd.Series()
-
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
-        asset_close = fetch_last_close(ticker)
+        ratios = fetch_historical_ratios(ticker)
         
-        # Merge data to ensure dates match perfectly
-        combined = pd.concat([asset_close, gold_close], axis=1).dropna()
-        combined.columns = ['Asset', 'Gold']
-        ratios_series = combined['Asset'] / combined['Gold']
-        
-        if not ratios_series.empty:
-            curr = float(ratios_series.iloc[-1])
-            avg = float(ratios_series.mean())
+        if not ratios.empty:
+            curr = float(ratios.iloc[-1])
+            avg_30d = float(ratios.tail(12).mean()) # Approx 1-year stability check
+            hist_high = float(ratios.max())
+            hist_low = float(ratios.min())
             
-            # 4. Data Stabilization Indicator (Added 2026-02-07)
-            diff = abs(curr - avg) / avg
-            stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
+            # Data Stabilization Indicator (as requested 2026-02-07)
+            diff = abs(curr - avg_30d) / avg_30d
+            stability_label = "🟢 Stable" if diff < 0.05 else "🔴 Volatile"
             
             is_buy, bg_color = get_status_styles(name, curr)
 
             with cols[i]:
+                # Standardized card with fixed heights
                 st.markdown(f"""
-                    <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
-                        <h4 style="margin:0; color:#bbb;">{name}</h4>
-                        <h2 style="margin:10px 0;">{curr:.4f}</h2>
-                        <p style="margin:0; font-size:0.9em;">{stability_label}</p>
-                        <p style="margin:0; font-size:0.8em; color:#888;">Variance: {diff:.2%}</p>
-                        {f"<div style='margin-top:10px; padding:5px; border:1px solid white; text-align:center; font-weight:bold;'>🔥 BUY SIGNAL</div>" if is_buy else ""}
+                    <div style="background-color:{bg_color}; padding:15px; border-radius:10px; border: 1px solid #444; height: 300px; color: white; position: relative;">
+                        <h4 style="margin:0; color:#bbb; text-align:center;">{name}</h4>
+                        <h2 style="margin:10px 0; text-align:center; color:#FFD700;">{curr:.4f}</h2>
+                        <hr style="border:0.5px solid #444;">
+                        <p style="margin:0; font-size:0.85em;"><b>Status:</b> {stability_label}</p>
+                        <p style="margin:0; font-size:0.85em;"><b>30Y High:</b> {hist_high:.4f}</p>
+                        <p style="margin:0; font-size:0.85em;"><b>30Y Low:</b> {hist_low:.4f}</p>
+                        <p style="margin:5px 0 0 0; font-size:0.75em; color:#888;">Variance: {diff:.2%}</p>
+                        {f"<div style='position:absolute; bottom:15px; left:15px; right:15px; padding:5px; border:2px solid white; text-align:center; font-weight:bold; background:rgba(255,255,255,0.1);'>🔥 BUY SIGNAL</div>" if is_buy else ""}
                     </div>
                 """, unsafe_allow_html=True)
         else:
-            with cols[i]:
-                st.warning(f"Waiting for {name}...")
+            with cols[i]: st.warning(f"No data for {name}")
 
-    except Exception as e:
-        with cols[i]:
-            st.error(f"Error: {name}")
+    except Exception:
+        with cols[i]: st.error(f"Error loading {name}")
 
 st.divider()
-st.caption("Emulating browser requests to bypass provider blocks. Includes Data Stabilization.")
+st.caption("30-Year Historical Data sourced via Yahoo Finance API. Includes Data Stabilization logic [2026-02-07].")
