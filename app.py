@@ -37,6 +37,7 @@ for i, (name, ticker) in enumerate(tickers.items()):
         ratios_series = raw_data / gold_data
         
         # FIX: Ensure we are using single numbers (floats) for the comparison
+        # Using .iloc[-1] and float() ensures these are single values
         curr = float(ratios_series.iloc[-1])
         avg = float(ratios_series.mean())
         
