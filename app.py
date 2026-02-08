@@ -3,33 +3,25 @@ import yfinance as yf
 import pandas as pd
 
 # 1. Configuration & Thresholds
-# These define your "Buy Zones" for potential signals
 BUY_ZONES = {
-    "Silver": 80.0,    # Buy when Ratio is >= 80
-    "S&P 500": 1.0,    # Buy when Ratio is <= 1.0
-    "Dow Jones": 6.0,  # Buy when Ratio is <= 6.0
-    "Miners": 0.05,    # Buy when Ratio is <= 0.05
-    "Oil": 0.05        # Buy when Ratio is <= 0.05
+    "Silver": 80.0,
+    "S&P 500": 1.0,
+    "Dow Jones": 6.0,
+    "Miners": 0.05,
+    "Oil": 0.05
 }
 
 # 2. App UI Setup
 st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
-st.write("Real-time relative value indicators with Data Stabilization tracking.")
+st.write("Real-time relative value indicators (Last Known Prices).")
 
 def get_status_styles(name, ratio):
-    # Logic to determine if we are in a Buy Zone
-    is_buy = False
-    if name == "Silver":
-        is_buy = ratio >= BUY_ZONES[name]
-    else:
-        is_buy = ratio <= BUY_ZONES[name]
-    
-    # Green background for Buy Signal, Dark Grey for Neutral
+    is_buy = ratio >= BUY_ZONES[name] if name == "Silver" else ratio <= BUY_ZONES[name]
     bg_color = "#28a745" if is_buy else "#1E1E1E" 
     return is_buy, bg_color
 
-# 3. Data Fetching & Ratio Calculation
+# 3. Data Fetching
 tickers = {
     "Silver": "SI=F", 
     "S&P 500": "ES=F", 
@@ -42,28 +34,26 @@ cols = st.columns(len(tickers))
 
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
-        # Fetching 5 days of hourly data
-        # We download both the asset and Gold (GC=F) to calculate the ratio
-        raw_data = yf.download(ticker, period="5d", interval="1h")['Close']
-        gold_data = yf.download("GC=F", period="5d", interval="1h")['Close']
+        # CHANGE: We use '1mo' and '1d' to ensure we get the last known daily close
+        # even if hourly markets are currently inactive.
+        raw_data = yf.download(ticker, period="1mo", interval="1d")['Close']
+        gold_data = yf.download("GC=F", period="1mo", interval="1d")['Close']
         
-        # Create the ratio series and drop any missing/NaN values for safety
+        # Align data and drop any missing values
         ratios_series = (raw_data / gold_data).dropna()
         
         if not ratios_series.empty:
-            # --- RESOLVING AMBIGUITY ERROR ---
-            # We explicitly extract single float values (scalars)
+            # Scalar extraction (prevents Ambiguity Error)
             curr = float(ratios_series.iloc[-1])
             avg = float(ratios_series.mean())
             
-            # 4. Data Stabilization Indicator (Added as requested 2026-02-07)
-            # Checks if current ratio is within 2% of the 5-day average
+            # 4. Data Stabilization Indicator (Added 2026-02-07)
             diff = abs(curr - avg) / avg
             stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
             
             is_buy, bg_color = get_status_styles(name, curr)
 
-            # 5. Display results in themed cards
+            # 5. Display Cards
             with cols[i]:
                 st.markdown(f"""
                     <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
@@ -76,13 +66,12 @@ for i, (name, ticker) in enumerate(tickers.items()):
                 """, unsafe_allow_html=True)
         else:
             with cols[i]:
-                st.warning(f"No data for {name}")
+                st.warning(f"No recent data for {name}")
 
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
-            st.caption("Check ticker symbol or connection.")
 
 # 6. Footer
 st.divider()
-st.caption("Auto-updating via GitHub & Streamlit Cloud. Includes Data Stabilization logic.")
+st.caption("Showing last known closing prices. Includes Data Stabilization logic.")
