@@ -14,14 +14,27 @@ BUY_ZONES = {
 # 2. App UI Setup
 st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
-st.write("30-Year Historical Analysis & Data Stabilization")
+st.write("30-Year Historical Analysis & Data Stabilization [Updated Layout]")
 
 def get_status_styles(name, ratio):
     is_buy = ratio >= BUY_ZONES[name] if name == "Silver" else ratio <= BUY_ZONES[name]
-    bg_color = "#28a745" if is_buy else "#1E1E1E" 
-    return is_buy, bg_color
+    # Green for Buy, Dark Grey for Hold
+    bg_color = "#1e4620" if is_buy else "#1E1E1E" 
+    status_text = "🔥 BUY SIGNAL" if is_buy else "⏳ HOLD / NEUTRAL"
+    return is_buy, bg_color, status_text
 
-# 3. Enhanced Data Fetching
+# 3. Enhanced Data Fetching with Caching
+@st.cache_data(ttl=3600)
+def fetch_historical_ratios(ticker, gold_ticker="GC=F"):
+    try:
+        asset = yf.Ticker(ticker).history(period="30y", interval="1mo")['Close']
+        gold = yf.Ticker(gold_ticker).history(period="30y", interval="1mo")['Close']
+        combined = pd.concat([asset, gold], axis=1).dropna()
+        combined.columns = ['Asset', 'Gold']
+        return combined['Asset'] / combined['Gold']
+    except:
+        return pd.Series()
+
 tickers = {
     "Silver": "SI=F", 
     "S&P 500": "ES=F", 
@@ -29,17 +42,6 @@ tickers = {
     "Miners": "GDXJ", 
     "Oil": "CL=F"
 }
-
-@st.cache_data(ttl=3600) # Cache for 1 hour to prevent API blocks
-def fetch_historical_ratios(ticker, gold_ticker="GC=F"):
-    # Fetch 30 years of monthly data for historical context
-    asset = yf.Ticker(ticker).history(period="30y", interval="1mo")['Close']
-    gold = yf.Ticker(gold_ticker).history(period="30y", interval="1mo")['Close']
-    
-    # Align and calculate
-    combined = pd.concat([asset, gold], axis=1).dropna()
-    combined.columns = ['Asset', 'Gold']
-    return combined['Asset'] / combined['Gold']
 
 cols = st.columns(len(tickers))
 
@@ -49,35 +51,41 @@ for i, (name, ticker) in enumerate(tickers.items()):
         
         if not ratios.empty:
             curr = float(ratios.iloc[-1])
-            avg_30d = float(ratios.tail(12).mean()) # Approx 1-year stability check
+            avg_12m = float(ratios.tail(12).mean())
             hist_high = float(ratios.max())
             hist_low = float(ratios.min())
             
-            # Data Stabilization Indicator (as requested 2026-02-07)
-            diff = abs(curr - avg_30d) / avg_30d
+            # Data Stabilization Check (2026-02-07 instruction)
+            diff = abs(curr - avg_12m) / avg_12m
             stability_label = "🟢 Stable" if diff < 0.05 else "🔴 Volatile"
             
-            is_buy, bg_color = get_status_styles(name, curr)
+            is_buy, bg_color, status_text = get_status_styles(name, curr)
 
             with cols[i]:
-                # Standardized card with fixed heights
+                # Updated CSS: Using Flexbox to prevent overlap
                 st.markdown(f"""
-                    <div style="background-color:{bg_color}; padding:15px; border-radius:10px; border: 1px solid #444; height: 300px; color: white; position: relative;">
-                        <h4 style="margin:0; color:#bbb; text-align:center;">{name}</h4>
-                        <h2 style="margin:10px 0; text-align:center; color:#FFD700;">{curr:.4f}</h2>
-                        <hr style="border:0.5px solid #444;">
-                        <p style="margin:0; font-size:0.85em;"><b>Status:</b> {stability_label}</p>
-                        <p style="margin:0; font-size:0.85em;"><b>30Y High:</b> {hist_high:.4f}</p>
-                        <p style="margin:0; font-size:0.85em;"><b>30Y Low:</b> {hist_low:.4f}</p>
-                        <p style="margin:5px 0 0 0; font-size:0.75em; color:#888;">Variance: {diff:.2%}</p>
-                        {f"<div style='position:absolute; bottom:15px; left:15px; right:15px; padding:5px; border:2px solid white; text-align:center; font-weight:bold; background:rgba(255,255,255,0.1);'>🔥 BUY SIGNAL</div>" if is_buy else ""}
+                    <div style="background-color:{bg_color}; padding:20px; border-radius:12px; border: 1px solid #444; height: 350px; color: white; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 2px 2px 10px rgba(0,0,0,0.5);">
+                        <div style="text-align: center;">
+                            <h4 style="margin:0; color:#bbb; text-transform: uppercase; font-size: 0.8em; letter-spacing: 1px;">{name}</h4>
+                            <h1 style="margin:10px 0; color:#FFD700; font-size: 2.2em;">{curr:.4f}</h1>
+                        </div>
+                        
+                        <div style="font-size: 0.9em; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;">
+                            <p style="margin:3px 0; display: flex; justify-content: space-between;"><span>Stability:</span> <b>{stability_label}</b></p>
+                            <p style="margin:3px 0; display: flex; justify-content: space-between;"><span>30Y High:</span> <b>{hist_high:.2f}</b></p>
+                            <p style="margin:3px 0; display: flex; justify-content: space-between;"><span>30Y Low:</span> <b>{hist_low:.2f}</b></p>
+                            <p style="margin:3px 0; display: flex; justify-content: space-between; color: #888; font-size: 0.8em;"><span>Variance:</span> <b>{diff:.2%}</b></p>
+                        </div>
+
+                        <div style="margin-top: 15px; padding: 10px; border: 1px solid {'#fff' if is_buy else '#444'}; text-align: center; font-weight: bold; border-radius: 5px; background: {'rgba(255,255,255,0.1)' if is_buy else 'transparent'};">
+                            {status_text}
+                        </div>
                     </div>
                 """, unsafe_allow_html=True)
         else:
-            with cols[i]: st.warning(f"No data for {name}")
-
+            cols[i].warning(f"No data for {name}")
     except Exception:
-        with cols[i]: st.error(f"Error loading {name}")
+        cols[i].error(f"Error: {name}")
 
 st.divider()
-st.caption("30-Year Historical Data sourced via Yahoo Finance API. Includes Data Stabilization logic [2026-02-07].")
+st.caption("Standardized Layout V2 | 30Y Historical Context | Data Stabilization Active")
