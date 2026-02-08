@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 
 # 1. Configuration & Thresholds
-# Note: As per your request, we use these to determine "Buy Zones"
+# These define your "Green Zones" for potential buy signals
 BUY_ZONES = {
     "Silver": 80.0,    # Buy when Ratio is >= 80
     "S&P 500": 1.0,    # Buy when Ratio is <= 1.0
@@ -17,7 +17,7 @@ st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
 st.write("Real-time relative value indicators with Data Stabilization tracking.")
 
-def get_status_styles(name, ratio, stability_label):
+def get_status_styles(name, ratio):
     # Logic to determine if we are in a Buy Zone
     is_buy = False
     if name == "Silver":
@@ -25,7 +25,7 @@ def get_status_styles(name, ratio, stability_label):
     else:
         is_buy = ratio <= BUY_ZONES[name]
     
-    # Green for Buy Signal, Dark Grey for Neutral
+    # Green background for Buy Signal, Dark Grey for Neutral
     bg_color = "#28a745" if is_buy else "#1E1E1E" 
     return is_buy, bg_color
 
@@ -43,7 +43,7 @@ cols = st.columns(len(tickers))
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
         # Fetching 5 days of hourly data for stabilization check
-        # We fetch both the asset and Gold (GC=F) to create the ratio
+        # We fetch the asset and Gold (GC=F) to calculate the ratio
         raw_data = yf.download(ticker, period="5d", interval="1h")['Close']
         gold_data = yf.download("GC=F", period="5d", interval="1h")['Close']
         
@@ -51,8 +51,7 @@ for i, (name, ticker) in enumerate(tickers.items()):
         ratios_series = raw_data / gold_data
         
         # --- FIX FOR LINE 43 ERROR ---
-        # We extract the latest value and the average as single floats
-        # .iloc[-1] gets the most recent data point
+        # Extract the latest value and the 5-day average as single floats
         curr = float(ratios_series.iloc[-1])
         avg = float(ratios_series.mean())
         
@@ -61,7 +60,7 @@ for i, (name, ticker) in enumerate(tickers.items()):
         diff = abs(curr - avg) / avg
         stability_label = "🟢 Stable" if diff < 0.02 else "🔴 Volatile"
         
-        is_buy, bg_color = get_status_styles(name, curr, stability_label)
+        is_buy, bg_color = get_status_styles(name, curr)
 
         # 5. Display results in themed cards
         with cols[i]:
@@ -78,8 +77,8 @@ for i, (name, ticker) in enumerate(tickers.items()):
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
-            st.caption("Check ticker symbol or connection.")
+            st.caption("Data currently unavailable.")
 
 # 6. Footer
 st.divider()
-st.caption("Auto-updating via GitHub & Streamlit Cloud. Includes Data Stabilization logic.")
+st.caption("Data sourced via yfinance. Includes real-time Data Stabilization indicators.")
