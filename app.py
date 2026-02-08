@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 
 # 1. Configuration & Thresholds
-# These define your "Green Zones" for potential buy signals
+# These define your "Buy Zones" for potential signals
 BUY_ZONES = {
     "Silver": 80.0,    # Buy when Ratio is >= 80
     "S&P 500": 1.0,    # Buy when Ratio is <= 1.0
@@ -43,15 +43,16 @@ cols = st.columns(len(tickers))
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
         # Fetching 5 days of hourly data for stabilization check
-        # We fetch the asset and Gold (GC=F) to calculate the ratio
+        # We download both the asset and Gold (GC=F) to calculate the ratio
         raw_data = yf.download(ticker, period="5d", interval="1h")['Close']
         gold_data = yf.download("GC=F", period="5d", interval="1h")['Close']
         
         # Create the ratio series
         ratios_series = raw_data / gold_data
         
-        # --- FIX FOR LINE 43 ERROR ---
-        # Extract the latest value and the 5-day average as single floats
+        # --- FIX FOR VALUE ERROR ---
+        # We extract the latest value and the 5-day average as single floats
+        # This prevents the "Series is ambiguous" crash
         curr = float(ratios_series.iloc[-1])
         avg = float(ratios_series.mean())
         
@@ -77,8 +78,8 @@ for i, (name, ticker) in enumerate(tickers.items()):
     except Exception as e:
         with cols[i]:
             st.error(f"Error: {name}")
-            st.caption("Data currently unavailable.")
+            st.caption("Check ticker symbol or connection.")
 
 # 6. Footer
 st.divider()
-st.caption("Data sourced via yfinance. Includes real-time Data Stabilization indicators.")
+st.caption("Auto-updating via GitHub & Streamlit Cloud. Includes Data Stabilization logic.")
