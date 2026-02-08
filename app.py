@@ -4,10 +4,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-# Set page configuration for a wide dashboard layout
+# Set page configuration
 st.set_page_config(page_title="Ratio Asset Allocator", layout="wide")
 
-# 1. DATA FETCHING (Optimized with Caching)
+# 1. DATA FETCHING (With Caching and Error Handling)
 @st.cache_data(ttl=3600)
 def fetch_all_data():
     tickers = {
@@ -17,179 +17,143 @@ def fetch_all_data():
     data_dict = {}
     for name, sym in tickers.items():
         try:
-            # Monthly interval to ensure smooth slider transitions
-            df = yf.download(sym, period="30y", interval="1mo", progress=False)
+            # Monthly data is more stable for long-term ratio analysis
+            df = yf.download(sym, period="max", interval="1mo", progress=False)
             if not df.empty:
-                # Use .squeeze() to ensure we have a Series for easy manipulation
-                data_dict[name] = df['Close'].squeeze()
+                # Use .iloc[:,0] to handle potential MultiIndex columns from yfinance
+                data_dict[name] = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
         except Exception: 
             continue
     
-    if not data_dict: 
-        return pd.DataFrame()
-    
-    # Combine all assets into one DataFrame and drop rows with missing values
+    if not data_dict: return pd.DataFrame()
     return pd.concat(data_dict.values(), axis=1, keys=data_dict.keys()).dropna()
 
 full_history = fetch_all_data()
 
-# Error handling for empty data (Prevents st.columns crash) 
+# CRITICAL ERROR FIX: Prevent st.columns crash if data fails to load
 if full_history.empty:
-    st.error("❌ Critical Error: Unable to fetch market data. Please check your internet connection.")
+    st.error("❌ Critical Error: Market data unavailable. Check internet connection or API status.")
     st.stop()
 
-# --- 2. TOP-LEVEL NAVIGATION CONTROLS ---
-st.title("🚨 Dynamic Extreme Value Command Center")
+# --- 2. NAVIGATION CONTROLS ---
+st.title("🚨 Dynamic Asset Ratio Command Center")
 
-# Prepare date labels for the slider (e.g., "Jan 2024")
 date_labels = full_history.index.strftime('%b %Y').tolist()
-min_idx = 13 # Minimum required for 12-month stabilization calculation
-max_idx = len(date_labels) - 1
+# Min index set to 13 to allow for 12-month stabilization calculation
+min_idx, max_idx = 13, len(date_labels) - 1
 
-# Initialize session state for the slider index if not already present
 if 'sim_index' not in st.session_state:
     st.session_state.sim_index = max_idx
 
-# Function for arrow button controls
-def change_index(delta):
-    new_val = st.session_state.sim_index + delta
-    if min_idx <= new_val <= max_idx:
-        st.session_state.sim_index = new_val
+def move_timeline(delta):
+    new_idx = st.session_state.sim_index + delta
+    if min_idx <= new_idx <= max_idx:
+        st.session_state.sim_index = new_idx
 
-# Control Bar UI Layout
-nav_col1, nav_col2, nav_col3 = st.columns([1, 6, 1])
-
-with nav_col1:
-    st.write("##") # Vertical alignment spacing
-    st.button("◀ Prev", on_click=change_index, args=(-1,), use_container_width=True)
-
-with nav_col2:
+nav_l, nav_c, nav_r = st.columns([1, 6, 1])
+with nav_l:
+    st.button("◀ Prev", on_click=move_timeline, args=(-1,), use_container_width=True)
+with nav_c:
     sim_index = st.select_slider(
-        "Simulation Timeline (Backtest Perspective)",
-        options=range(len(date_labels)),
-        format_func=lambda x: date_labels[x],
-        key="sim_index"
+        "Simulation Timeline", options=range(len(date_labels)),
+        format_func=lambda x: date_labels[x], key="sim_index"
     )
-
-with nav_col3:
-    st.write("##")
-    st.button("Next ▶", on_click=change_index, args=(1,), use_container_width=True)
+with nav_r:
+    st.button("Next ▶", on_click=move_timeline, args=(1,), use_container_width=True)
 
 st.divider()
 
 # --- 3. ANALYSIS ENGINE ---
-# Slice data based on the slider selection
 current_history = full_history.iloc[:sim_index + 1]
 as_of_date = date_labels[sim_index]
-gold_price = float(current_history['Gold'].iloc[-1]) # Fix for FutureWarning 
+gold_price = float(current_history['Gold'].iloc[-1])
 
-st.subheader(f"Current Environment: {as_of_date} | Gold Price: ${gold_price:,.2f}")
+st.subheader(f"Snapshot: {as_of_date} | Gold: ${gold_price:,.2f}")
 
-tickers_map = {"Silver": "SI=F", "S&P 500": "ES=F", "Dow Jones": "YM=F", "Miners": "GDXJ", "Oil": "CL=F"}
-tv_map = {"Silver": "OANDA:XAGUSD", "S&P 500": "CME_MINI:ES1!", "Dow Jones": "CBOT:YM1!", "Miners": "AMEX:GDXJ", "Oil": "NYMEX:CL1!"}
+asset_data = []
+# Mapping for TradingView links
+tv_map = {"Silver": "XAGUSD", "S&P 500": "SPY", "Dow Jones": "DIA", "Miners": "GDXJ", "Oil": "USOIL"}
 
-asset_list = []
-for name in tickers_map.keys():
-    # Calculation Logic: Gold/Silver (Inverted) vs Others/Gold
-    ratios = (current_history['Gold'] / current_history['Silver']) if name == "Silver" else (current_history[name] / current_history['Gold'])
-    ratios = ratios.dropna()
+for name in ["Silver", "S&P 500", "Dow Jones", "Miners", "Oil"]:
+    # Ratio Calculation
+    if name == "Silver":
+        ratios = (current_history['Gold'] / current_history['Silver']).dropna()
+    else:
+        ratios = (current_history[name] / current_history['Gold']).dropna()
     
-    if len(ratios) < 2: continue # Prevents IndexError 
+    if len(ratios) < 2: continue
 
     curr, prev = float(ratios.iloc[-1]), float(ratios.iloc[-2])
     h_max, h_min = float(ratios.max()), float(ratios.min())
     
-    # DATA STABILIZATION INDICATOR
+    # DATA STABILIZATION
+    # Check if current value is within 5% of the 12-month moving average
     avg_12m = float(ratios.tail(12).mean())
-    stability_val = abs(curr - avg_12m) / avg_12m
-    stability = "🟢 Stable" if stability_val < 0.05 else "🔴 Volatile"
+    is_stable = abs(curr - avg_12m) / avg_12m < 0.05
+    stability = "🟢 Stable" if is_stable else "🔴 Volatile"
     
-    # Signal Thresholds
+    # Determine Scoring and Thresholds
     if name == "Silver":
-        ex_buy, reg_buy, ex_sell = h_max * 0.90, h_max * 0.80, h_min * 1.10
+        ex_buy, buy, ex_sell = h_max * 0.90, h_max * 0.80, h_min * 1.10
         score = curr / h_max 
     else:
-        ex_buy, reg_buy, ex_sell = h_min * 1.10, h_min * 1.20, h_max * 0.90
+        ex_buy, buy, ex_sell = h_min * 1.10, h_min * 1.20, h_max * 0.90
         score = h_min / curr
         
-    asset_list.append({
+    asset_data.append({
         "name": name, "ratios": ratios, "curr": curr, "trend": "↑" if curr > prev else "↓",
-        "max": h_max, "min": h_min, "score": score, "stability": stability,
-        "thresholds": {"ex_buy": ex_buy, "buy": reg_buy, "ex_sell": ex_sell}
+        "score": score, "stability": stability, "max": h_max, "min": h_min,
+        "t": {"ex_buy": ex_buy, "buy": buy, "ex_sell": ex_sell}
     })
 
-# Rank assets by best value score
-sorted_assets = sorted(asset_list, key=lambda x: x['score'], reverse=True)
+# Rank assets by value score
+sorted_assets = sorted(asset_data, key=lambda x: x['score'], reverse=True)
 
-# --- 4. DASHBOARD DISPLAY ---
-if sorted_assets:
+# --- 4. GRID DISPLAY ---
+if not sorted_assets:
+    st.warning("No assets found for the selected date range.")
+else:
     cols = st.columns(len(sorted_assets))
     for i, asset in enumerate(sorted_assets):
-        name, ratios, curr, t = asset['name'], asset['ratios'], asset['curr'], asset['thresholds']
+        # Color coding logic
+        is_silver = asset['name'] == "Silver"
+        c, t = asset['curr'], asset['t']
         
-        # UI/UX: Determine Card Color Based on Signals
-        if name == "Silver":
-            if curr >= t['ex_buy']: bg, label = "#004d00", "💎 GENERATIONAL BUY"
-            elif curr >= t['buy']: bg, label = "#1e4620", "🔥 BUY SIGNAL"
-            elif curr <= t['ex_sell']: bg, label = "#900C3F", "⚠️ EXTREME SELL"
-            else: bg, label = "#1E1E1E", "⏳ HOLD"
+        if (is_silver and c >= t['ex_buy']) or (not is_silver and c <= t['ex_buy']):
+            bg, status = "#004d00", "💎 GEN BUY"
+        elif (is_silver and c >= t['buy']) or (not is_silver and c <= t['buy']):
+            bg, status = "#1e4620", "🔥 BUY"
         else:
-            if curr <= t['ex_buy']: bg, label = "#004d00", "💎 GENERATIONAL BUY"
-            elif curr <= t['buy']: bg, label = "#1e4620", "🔥 BUY SIGNAL"
-            elif curr >= t['ex_sell']: bg, label = "#900C3F", "⚠️ EXTREME SELL"
-            else: bg, label = "#1E1E1E", "⏳ HOLD"
+            bg, status = "#1E1E1E", "⏳ HOLD"
 
         with cols[i]:
-            # Main Asset Card
             st.markdown(f"""
-            <div style="background-color:{bg}; padding:15px; border-radius:10px; border:1px solid #444; color:white; height:380px; display:flex; flex-direction:column; justify-content:space-between; margin-bottom: 10px;">
-                <div style="text-align:center;">
-                    <div style="font-size:0.8em; color:#bbb;">{name} / Gold Ratio</div>
-                    <div style="font-size:2em; font-weight:bold; color:#FFD700;">{asset['trend']} {curr:.2f}</div>
+            <div style="background-color:{bg}; padding:15px; border-radius:10px; border:1px solid #444; color:white; height:340px;">
+                <h3 style="text-align:center; margin:0;">{asset['name']}</h3>
+                <div style="text-align:center; font-size:1.8em; font-weight:bold; color:#FFD700;">{asset['trend']} {asset['curr']:.2f}</div>
+                <hr style="border:0.5px solid #555;">
+                <div style="font-size:0.85em; line-height:1.6;">
+                    <b>Stability:</b> {asset['stability']}<br>
+                    <b>30Y High:</b> {asset['max']:.2f}<br>
+                    <b>30Y Low:</b> {asset['min']:.2f}
                 </div>
-                <div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:5px; font-size:0.75em;">
-                    <div style="display:flex; justify-content:space-between;"><span>Stabilization:</span><b>{asset['stability']}</b></div>
-                    <div style="display:flex; justify-content:space-between;"><span>30Y Max:</span><b>{asset['max']:.2f}</b></div>
-                    <div style="display:flex; justify-content:space-between;"><span>30Y Min:</span><b>{asset['min']:.2f}</b></div>
-                </div>
-                <div style="text-align:center; padding:10px; border:2px solid white; font-weight:bold; border-radius:5px; background:rgba(255,255,255,0.1);">
-                    {label}
-                </div>
-                <div style="text-align:center; margin-top:5px;">
-                    <a href="https://www.tradingview.com/chart/?symbol={tv_map[name]}" target="_blank" style="color:#3BB3E4; text-decoration:none; font-size:0.8em; font-weight:bold;">🔍 TRADINGVIEW CHART ↗️</a>
-                </div>
+                <div style="margin-top:20px; text-align:center; padding:10px; border:2px solid white; border-radius:5px; font-weight:bold;">{status}</div>
+                <div style="text-align:center; margin-top:10px;"><a href="https://www.tradingview.com/chart/?symbol={tv_map[asset['name']]}" target="_blank" style="color:#3BB3E4; text-decoration:none; font-size:0.8em;">View TV Chart ↗️</a></div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Integrated Visual Chart with Current Marker
-            with st.expander("📊 Technical Visual Range"):
+            with st.expander("Chart"):
                 fig = go.Figure()
+                fig.add_trace(go.Scatter(x=asset['ratios'].index, y=asset['ratios'].values, line=dict(color='#FFD700', width=1)))
                 
-                # Full Historical Trend
-                fig.add_trace(go.Scatter(x=ratios.index, y=ratios.values, line=dict(color='#FFD700', width=1)))
-                
-                # NEW: Current Position Marker (Red Diamond)
+                # RED MARKER for current slider position
                 fig.add_trace(go.Scatter(
-                    x=[ratios.index[-1]], 
-                    y=[ratios.iloc[-1]],
-                    mode='markers',
-                    marker=dict(color='#FF4B4B', size=10, symbol='diamond', line=dict(width=1, color='white'))
+                    x=[asset['ratios'].index[-1]], y=[asset['ratios'].iloc[-1]],
+                    mode='markers', marker=dict(color='#FF4B4B', size=10, symbol='diamond')
                 ))
                 
-                # Signal Threshold Lines
-                fig.add_hline(y=t['buy'], line_dash="dash", line_color="green", opacity=0.5)
-                fig.add_hline(y=t['ex_buy'], line_dash="solid", line_color="lime", opacity=0.7)
-                
-                fig.update_layout(
-                    height=180, 
-                    margin=dict(l=0, r=0, t=10, b=0), 
-                    paper_bgcolor='rgba(0,0,0,0)', 
-                    plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"), 
-                    showlegend=False,
-                    xaxis=dict(showgrid=False),
-                    yaxis=dict(showgrid=False)
-                )
+                fig.update_layout(height=150, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor='rgba(0,0,0,0)', 
+                                  plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                fig.update_xaxes(visible=False)
+                fig.update_yaxes(visible=False)
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-else:
-    st.warning("⚠️ Insufficient data available for the chosen simulation date.")
