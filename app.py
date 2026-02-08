@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# 1. Configuration & Thresholds
+# 1. Configuration
 BUY_ZONES = {
     "Silver": 80.0,
     "S&P 500": 1.0,
@@ -14,7 +14,7 @@ BUY_ZONES = {
 # 2. App UI Setup
 st.set_page_config(page_title="Value Dashboard", layout="wide")
 st.title("🏆 Gold-Standard Command Center")
-st.write("Real-time relative value indicators (Last Known Prices).")
+st.write("Displaying Last Known Prices (Market Closure Resilient)")
 
 def get_status_styles(name, ratio):
     is_buy = ratio >= BUY_ZONES[name] if name == "Silver" else ratio <= BUY_ZONES[name]
@@ -34,16 +34,16 @@ cols = st.columns(len(tickers))
 
 for i, (name, ticker) in enumerate(tickers.items()):
     try:
-        # CHANGE: We use '1mo' and '1d' to ensure we get the last known daily close
-        # even if hourly markets are currently inactive.
+        # FIX: Changed interval to '1d' and period to '1mo'
+        # This ensures we get the last known daily close even on weekends.
         raw_data = yf.download(ticker, period="1mo", interval="1d")['Close']
         gold_data = yf.download("GC=F", period="1mo", interval="1d")['Close']
         
-        # Align data and drop any missing values
+        # Align and clean data
         ratios_series = (raw_data / gold_data).dropna()
         
         if not ratios_series.empty:
-            # Scalar extraction (prevents Ambiguity Error)
+            # Convert to single numbers (prevents Ambiguity Error)
             curr = float(ratios_series.iloc[-1])
             avg = float(ratios_series.mean())
             
@@ -53,7 +53,6 @@ for i, (name, ticker) in enumerate(tickers.items()):
             
             is_buy, bg_color = get_status_styles(name, curr)
 
-            # 5. Display Cards
             with cols[i]:
                 st.markdown(f"""
                     <div style="background-color:{bg_color}; padding:20px; border-radius:10px; border: 1px solid #444; min-height: 180px; color: white;">
@@ -72,6 +71,5 @@ for i, (name, ticker) in enumerate(tickers.items()):
         with cols[i]:
             st.error(f"Error: {name}")
 
-# 6. Footer
 st.divider()
-st.caption("Showing last known closing prices. Includes Data Stabilization logic.")
+st.caption("Data source: Yahoo Finance. Includes Data Stabilization logic.")
