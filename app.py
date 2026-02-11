@@ -42,6 +42,7 @@ if full_history.empty:
 # 3. NAVIGATION
 st.title("🛡️ Ratio Command Center")
 date_labels = full_history.index.strftime('%b %Y').tolist()
+# Min index 13 ensures enough data for 12-month stabilization calculation
 min_idx, max_idx = 13, len(date_labels) - 1
 
 if 'sim_index' not in st.session_state:
@@ -53,25 +54,42 @@ with n2: sim_index = st.select_slider("", options=range(len(date_labels)), forma
 with n3: st.button("NEWER ▶", on_click=lambda: st.session_state.update(sim_index=min(max_idx, st.session_state.sim_index+1)))
 
 # 4. ANALYSIS
-curr_hist = full_history.iloc[:sim_index + 1]
+# We need the full history for the chart background and the sliced history for the marker
+selected_date = full_history.index[sim_index]
 assets_to_analyze = []
 tv_map = {"Silver": "XAGUSD", "S&P 500": "SPY", "Dow Jones": "DIA", "Miners": "GDXJ", "Oil": "USOIL"}
 
 for name in tv_map.keys():
-    ratios = (curr_hist['Gold'] / curr_hist['Silver']) if name == "Silver" else (curr_hist[name] / curr_hist['Gold'])
-    ratios = ratios.dropna()
-    if len(ratios) < 2: continue
-
-    curr, prev = float(ratios.iloc[-1]), float(ratios.iloc[-2])
-    h_max, h_min = float(ratios.max()), float(ratios.min())
+    # Calculate ratio across the ENTIRE 30-year history
+    if name == "Silver":
+        total_ratios = (full_history['Gold'] / full_history['Silver']).dropna()
+    else:
+        total_ratios = (full_history[name] / full_history['Gold']).dropna()
     
-    # [cite: 2026-02-07] Data Stabilization
-    avg_12m = float(ratios.tail(12).mean())
+    # Slice for calculations up to the slider date
+    sliced_ratios = total_ratios.loc[:selected_date]
+    if len(sliced_ratios) < 2: continue
+
+    curr = float(sliced_ratios.iloc[-1])
+    prev = float(sliced_ratios.iloc[-2])
+    h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
+    
+    # Data Stabilization
+    avg_12m = float(sliced_ratios.tail(12).mean())
     is_stable = abs(curr - avg_12m) / avg_12m < 0.05
     
     score = (curr / h_max) if name == "Silver" else (h_min / curr)
-    assets_to_analyze.append({"name": name, "ratios": ratios, "curr": curr, "trend": "↑" if curr > prev else "↓",
-                               "score": score, "stable": is_stable, "max": h_max, "min": h_min})
+    assets_to_analyze.append({
+        "name": name, 
+        "total_ratios": total_ratios, 
+        "curr": curr, 
+        "curr_date": selected_date,
+        "trend": "↑" if curr > prev else "↓",
+        "score": score, 
+        "stable": is_stable, 
+        "max": h_max, 
+        "min": h_min
+    })
 
 # 5. COLOURISED GRID
 sorted_assets = sorted(assets_to_analyze, key=lambda x: x['score'], reverse=True)
@@ -87,7 +105,7 @@ if sorted_assets:
             accent_color = "#10b981"
             status_text = "💎 GEN BUY"
         elif not a['stable']:
-            tile_color = "#451a03" # Deep Amber/Brown
+            tile_color = "#451a03" # Deep Amber
             accent_color = "#f59e0b"
             status_text = "⚠️ VOLATILE"
         else:
@@ -111,14 +129,36 @@ if sorted_assets:
             
             with st.expander("History Chart"):
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=a['ratios'].index, y=a['ratios'].values, name="Ratio", line=dict(color=accent_color, width=2)))
                 
-                # Highlight current point
-                fig.add_trace(go.Scatter(x=[a['ratios'].index[-1]], y=[a['ratios'].iloc[-1]], mode='markers', marker=dict(color='white', size=10, line=dict(width=2, color=accent_color))))
+                # Plot the ENTIRE 30-year history as a faint line
+                fig.add_trace(go.Scatter(
+                    x=a['total_ratios'].index, 
+                    y=a['total_ratios'].values, 
+                    name="Full History", 
+                    line=dict(color='rgba(255,255,255,0.2)', width=1)
+                ))
+
+                # Plot the history UP TO the selected date as the main color
+                active_history = a['total_ratios'].loc[:a['curr_date']]
+                fig.add_trace(go.Scatter(
+                    x=active_history.index, 
+                    y=active_history.values, 
+                    name="To Date", 
+                    line=dict(color=accent_color, width=2)
+                ))
+                
+                # RED DIAMOND MARKER: Pins exactly to the slider date
+                fig.add_trace(go.Scatter(
+                    x=[a['curr_date']], 
+                    y=[a['curr']], 
+                    mode='markers', 
+                    marker=dict(color='#ff4b4b', size=12, symbol='diamond', line=dict(width=2, color='white')),
+                    name="Selection"
+                ))
                 
                 # Axis Labeling
                 fig.update_layout(
-                    height=180, margin=dict(l=10,r=10,t=10,b=10),
+                    height=200, margin=dict(l=10,r=10,t=10,b=10),
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                     showlegend=False,
                     xaxis=dict(title="Year", title_font=dict(size=10, color="#8b949e"), showgrid=False, tickfont=dict(size=8, color="#8b949e")),
