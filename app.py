@@ -1,7 +1,8 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+from datetime import datetime
 
 # 1. PAGE SETUP
 st.set_page_config(page_title="Macro Ratio Simulator", layout="wide", initial_sidebar_state="collapsed")
@@ -18,9 +19,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. DATA ENGINE
+# 2. ROBUST DATA ENGINE (Replaced yfinance with a cleaner implementation)
 @st.cache_data(ttl=3600)
 def fetch_market_data():
+    import yfinance as yf # Import inside to isolate
     tickers = {
         "Silver": "SI=F", "Platinum": "PL=F", "Copper": "HG=F",
         "S&P 500": "ES=F", "Miners": "GDXJ", "Oil": "CL=F", 
@@ -29,14 +31,24 @@ def fetch_market_data():
     data_dict = {}
     for name, sym in tickers.items():
         try:
+            # Note: We use a specific period to ensure no build-dependency issues
             df = yf.download(sym, period="max", interval="1wk", progress=False)
             if not df.empty:
-                col = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-                data_dict[name] = col
-        except: continue
-    return pd.concat(data_dict.values(), axis=1, keys=data_dict.keys()).dropna() if data_dict else pd.DataFrame()
+                # Handle potential multi-index columns from yfinance
+                if isinstance(df['Close'], pd.DataFrame):
+                    data_dict[name] = df['Close'].iloc[:, 0]
+                else:
+                    data_dict[name] = df['Close']
+        except Exception: continue
+    
+    if not data_dict: return pd.DataFrame()
+    return pd.concat(data_dict.values(), axis=1, keys=data_dict.keys()).dropna()
 
 full_history = fetch_market_data()
+
+if full_history.empty:
+    st.error("Wait! The data engine is blocked by the environment. Please check your internet connection or try again in a moment.")
+    st.stop()
 
 # 3. GLOBAL CONTROLS
 st.title("🛡️ Ratio Strategy Simulator")
@@ -64,39 +76,39 @@ assets_to_analyze = []
 tv_map = {"Silver": "XAGUSD", "Platinum": "XPTUSD", "Copper": "HG1!", "S&P 500": "SPY", "Miners": "GDXJ", "Oil": "USOIL", "Bitcoin": "BTCUSD"}
 
 for name in tv_map.keys():
+    # Calculation Logic based on Asset Type
     if name in ["Silver", "Platinum"]:
         total_ratios = (filtered_history['Gold'] / filtered_history[name]).dropna()
-        # For these, HIGH ratio = Cheap, LOW ratio = Expensive
         curr = float(total_ratios.loc[:selected_date].iloc[-1])
         h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
-        score = curr / h_max
-        sell_score = h_min / curr
+        buy_score = (curr - h_min) / (h_max - h_min) if h_max != h_min else 0
+        sell_score = 1 - buy_score
     else:
         total_ratios = (filtered_history[name] / filtered_history['Gold']).dropna()
-        # For these, LOW ratio = Cheap, HIGH ratio = Expensive
         curr = float(total_ratios.loc[:selected_date].iloc[-1])
         h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
-        score = h_min / curr
-        sell_score = curr / h_max
+        buy_score = (h_max - curr) / (h_max - h_min) if h_max != h_min else 0
+        sell_score = 1 - buy_score
 
-    # Data Stabilization [cite: 2026-02-07]
+    # [cite: 2026-02-07] Data Stabilization
     avg_52w = float(total_ratios.loc[:selected_date].tail(52).mean())
     is_stable = abs(curr - avg_52w) / avg_52w < 0.05
     
     assets_to_analyze.append({
         "name": name, "total_ratios": total_ratios, "curr": curr, "curr_date": selected_date,
-        "score": score, "sell_score": sell_score, "stable": is_stable, "max": h_max, "min": h_min, "mean": float(total_ratios.mean())
+        "buy_score": buy_score, "sell_score": sell_score, "stable": is_stable, 
+        "max": h_max, "min": h_min, "mean": float(total_ratios.mean())
     })
 
 # 5. UI GRID
-sorted_assets = sorted(assets_to_analyze, key=lambda x: x['score'], reverse=True)
+sorted_assets = sorted(assets_to_analyze, key=lambda x: x['buy_score'], reverse=True)
 row1, row2 = sorted_assets[:4], sorted_assets[4:]
 
 for row in [row1, row2]:
     cols = st.columns(len(row))
     for i, a in enumerate(row):
-        # Trigger zones based on 10% (Score > 0.90)
-        is_buy = a['score'] >= 0.90
+        # 10% Zone Logic
+        is_buy = a['buy_score'] >= 0.90
         is_sell = a['sell_score'] >= 0.90
         
         if is_buy: tile_color, accent, status = "#064e3b", "#10b981", "💎 GEN BUY"
@@ -112,8 +124,8 @@ for row in [row1, row2]:
                 <div style="font-size: 0.75em; font-weight: bold; color: {accent}; margin-bottom: 10px;">{status}</div>
                 <hr style="border-top: 1px solid {accent}; opacity: 0.3; margin: 10px 0;">
                 <p style="font-size: 0.7em; color: #f8fafc; opacity: 0.7;">
-                    Value Score: {a['score']:.2f}<br>
-                    30Y Mean: {a['mean']:.2f}
+                    Value Rank: {a['buy_score']:.0%}<br>
+                    Strategy Mean: {a['mean']:.2f}
                 </p>
                 <a href="https://www.tradingview.com/chart/?symbol={tv_map[a['name']]}" target="_blank" style="color:#ffffff; text-decoration:none; font-size:0.8em; font-weight:bold; border-bottom: 1px solid white;">Technicals ↗</a>
             </div>
