@@ -4,9 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # 1. PAGE SETUP
-st.set_page_config(page_title="Asset Ratio Command", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Macro Ratio Simulator", layout="wide", initial_sidebar_state="collapsed")
 
-# Theme CSS
 st.markdown("""
     <style>
     .main { background-color: #0d1117; }
@@ -22,11 +21,15 @@ st.markdown("""
 # 2. DATA ENGINE
 @st.cache_data(ttl=3600)
 def fetch_market_data():
-    tickers = {"Silver": "SI=F", "S&P 500": "ES=F", "Dow Jones": "YM=F", "Miners": "GDXJ", "Oil": "CL=F", "Gold": "GC=F"}
+    tickers = {
+        "Silver": "SI=F", "Platinum": "PL=F", "Copper": "HG=F",
+        "S&P 500": "ES=F", "Miners": "GDXJ", "Oil": "CL=F", 
+        "Bitcoin": "BTC-USD", "Gold": "GC=F"
+    }
     data_dict = {}
     for name, sym in tickers.items():
         try:
-            df = yf.download(sym, period="max", interval="1mo", progress=False)
+            df = yf.download(sym, period="max", interval="1wk", progress=False)
             if not df.empty:
                 col = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
                 data_dict[name] = col
@@ -35,133 +38,83 @@ def fetch_market_data():
 
 full_history = fetch_market_data()
 
-if full_history.empty:
-    st.error("Market data unavailable.")
-    st.stop()
+# 3. GLOBAL CONTROLS
+st.title("🛡️ Ratio Strategy Simulator")
 
-# 3. NAVIGATION
-st.title("🛡️ Ratio Command Center")
-date_labels = full_history.index.strftime('%b %Y').tolist()
-# Min index 13 ensures enough data for 12-month stabilization calculation
-min_idx, max_idx = 13, len(date_labels) - 1
+col_a, col_b = st.columns([1, 3])
+with col_a:
+    start_date_val = st.date_input("Strategy Start Date", value=full_history.index[0])
+    
+filtered_history = full_history.loc[start_date_val:]
+date_labels = filtered_history.index.strftime('%Y-W%U (%b %d)').tolist()
 
-if 'sim_index' not in st.session_state:
+min_idx, max_idx = 53, len(date_labels) - 1
+if 'sim_index' not in st.session_state or st.session_state.sim_index > max_idx:
     st.session_state.sim_index = max_idx
 
 n1, n2, n3 = st.columns([1, 6, 1])
 with n1: st.button("◀ OLDER", on_click=lambda: st.session_state.update(sim_index=max(min_idx, st.session_state.sim_index-1)))
-with n2: sim_index = st.select_slider("", options=range(len(date_labels)), format_func=lambda x: date_labels[x], key="sim_index")
+with n2: sim_index = st.select_slider("Simulation Position", options=range(len(date_labels)), 
+                                     format_func=lambda x: date_labels[x], key="sim_index")
 with n3: st.button("NEWER ▶", on_click=lambda: st.session_state.update(sim_index=min(max_idx, st.session_state.sim_index+1)))
 
-# 4. ANALYSIS
-# We need the full history for the chart background and the sliced history for the marker
-selected_date = full_history.index[sim_index]
+# 4. ANALYSIS (10% Buffer Logic)
+selected_date = filtered_history.index[sim_index]
 assets_to_analyze = []
-tv_map = {"Silver": "XAGUSD", "S&P 500": "SPY", "Dow Jones": "DIA", "Miners": "GDXJ", "Oil": "USOIL"}
+tv_map = {"Silver": "XAGUSD", "Platinum": "XPTUSD", "Copper": "HG1!", "S&P 500": "SPY", "Miners": "GDXJ", "Oil": "USOIL", "Bitcoin": "BTCUSD"}
 
 for name in tv_map.keys():
-    # Calculate ratio across the ENTIRE 30-year history
-    if name == "Silver":
-        total_ratios = (full_history['Gold'] / full_history['Silver']).dropna()
+    if name in ["Silver", "Platinum"]:
+        total_ratios = (filtered_history['Gold'] / filtered_history[name]).dropna()
+        # For these, HIGH ratio = Cheap, LOW ratio = Expensive
+        curr = float(total_ratios.loc[:selected_date].iloc[-1])
+        h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
+        score = curr / h_max
+        sell_score = h_min / curr
     else:
-        total_ratios = (full_history[name] / full_history['Gold']).dropna()
-    
-    # Slice for calculations up to the slider date
-    sliced_ratios = total_ratios.loc[:selected_date]
-    if len(sliced_ratios) < 2: continue
+        total_ratios = (filtered_history[name] / filtered_history['Gold']).dropna()
+        # For these, LOW ratio = Cheap, HIGH ratio = Expensive
+        curr = float(total_ratios.loc[:selected_date].iloc[-1])
+        h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
+        score = h_min / curr
+        sell_score = curr / h_max
 
-    curr = float(sliced_ratios.iloc[-1])
-    prev = float(sliced_ratios.iloc[-2])
-    h_max, h_min = float(total_ratios.max()), float(total_ratios.min())
+    # Data Stabilization [cite: 2026-02-07]
+    avg_52w = float(total_ratios.loc[:selected_date].tail(52).mean())
+    is_stable = abs(curr - avg_52w) / avg_52w < 0.05
     
-    # Data Stabilization
-    avg_12m = float(sliced_ratios.tail(12).mean())
-    is_stable = abs(curr - avg_12m) / avg_12m < 0.05
-    
-    score = (curr / h_max) if name == "Silver" else (h_min / curr)
     assets_to_analyze.append({
-        "name": name, 
-        "total_ratios": total_ratios, 
-        "curr": curr, 
-        "curr_date": selected_date,
-        "trend": "↑" if curr > prev else "↓",
-        "score": score, 
-        "stable": is_stable, 
-        "max": h_max, 
-        "min": h_min
+        "name": name, "total_ratios": total_ratios, "curr": curr, "curr_date": selected_date,
+        "score": score, "sell_score": sell_score, "stable": is_stable, "max": h_max, "min": h_min, "mean": float(total_ratios.mean())
     })
 
-# 5. COLOURISED GRID
+# 5. UI GRID
 sorted_assets = sorted(assets_to_analyze, key=lambda x: x['score'], reverse=True)
+row1, row2 = sorted_assets[:4], sorted_assets[4:]
 
-if sorted_assets:
-    cols = st.columns(len(sorted_assets))
-    for i, a in enumerate(sorted_assets):
-        is_buy = (a['name'] == "Silver" and a['curr'] >= a['max']*0.85) or (a['name'] != "Silver" and a['curr'] <= a['min']*1.15)
+for row in [row1, row2]:
+    cols = st.columns(len(row))
+    for i, a in enumerate(row):
+        # Trigger zones based on 10% (Score > 0.90)
+        is_buy = a['score'] >= 0.90
+        is_sell = a['sell_score'] >= 0.90
         
-        # Tile Coloring Logic
-        if is_buy:
-            tile_color = "#064e3b" # Deep Emerald
-            accent_color = "#10b981"
-            status_text = "💎 GEN BUY"
-        elif not a['stable']:
-            tile_color = "#451a03" # Deep Amber
-            accent_color = "#f59e0b"
-            status_text = "⚠️ VOLATILE"
-        else:
-            tile_color = "#1e293b" # Slate Blue
-            accent_color = "#60a5fa"
-            status_text = "⏳ NEUTRAL"
+        if is_buy: tile_color, accent, status = "#064e3b", "#10b981", "💎 GEN BUY"
+        elif is_sell: tile_color, accent, status = "#450a0a", "#f87171", "🚨 SELL ZONE"
+        elif not a['stable']: tile_color, accent, status = "#451a03", "#f59e0b", "⚠️ VOLATILE"
+        else: tile_color, accent, status = "#1e293b", "#60a5fa", "⏳ NEUTRAL"
         
         with cols[i]:
             st.markdown(f"""
-            <div style="border: 2px solid {accent_color}; padding: 20px; border-radius: 12px; background: {tile_color}; text-align: center; min-height: 280px;">
+            <div style="border: 2px solid {accent}; padding: 20px; border-radius: 12px; background: {tile_color}; text-align: center; min-height: 260px; margin-bottom: 20px;">
                 <h5 style="margin:0; color:#f8fafc; opacity: 0.8;">{a['name'].upper()}</h5>
-                <h2 style="margin:10px 0; color:#ffffff;">{a['trend']} {a['curr']:.2f}</h2>
-                <div style="font-size: 0.75em; font-weight: bold; color: {accent_color}; margin-bottom: 15px;">
-                    {status_text}
-                </div>
-                <hr style="border-top: 1px solid {accent_color}; opacity: 0.3; margin: 15px 0;">
-                <p style="font-size: 0.7em; color: #f8fafc; opacity: 0.7;">30Y Low: {a['min']:.1f} | High: {a['max']:.1f}</p>
-                <a href="https://www.tradingview.com/chart/?symbol={tv_map[a['name']]}" target="_blank" style="color:#ffffff; text-decoration:none; font-size:0.8em; font-weight:bold; border-bottom: 1px solid white;">Technical View ↗</a>
+                <h2 style="margin:10px 0; color:#ffffff;">{a['curr']:.2f}</h2>
+                <div style="font-size: 0.75em; font-weight: bold; color: {accent}; margin-bottom: 10px;">{status}</div>
+                <hr style="border-top: 1px solid {accent}; opacity: 0.3; margin: 10px 0;">
+                <p style="font-size: 0.7em; color: #f8fafc; opacity: 0.7;">
+                    Value Score: {a['score']:.2f}<br>
+                    30Y Mean: {a['mean']:.2f}
+                </p>
+                <a href="https://www.tradingview.com/chart/?symbol={tv_map[a['name']]}" target="_blank" style="color:#ffffff; text-decoration:none; font-size:0.8em; font-weight:bold; border-bottom: 1px solid white;">Technicals ↗</a>
             </div>
             """, unsafe_allow_html=True)
-            
-            with st.expander("History Chart"):
-                fig = go.Figure()
-                
-                # Plot the ENTIRE 30-year history as a faint line
-                fig.add_trace(go.Scatter(
-                    x=a['total_ratios'].index, 
-                    y=a['total_ratios'].values, 
-                    name="Full History", 
-                    line=dict(color='rgba(255,255,255,0.2)', width=1)
-                ))
-
-                # Plot the history UP TO the selected date as the main color
-                active_history = a['total_ratios'].loc[:a['curr_date']]
-                fig.add_trace(go.Scatter(
-                    x=active_history.index, 
-                    y=active_history.values, 
-                    name="To Date", 
-                    line=dict(color=accent_color, width=2)
-                ))
-                
-                # RED DIAMOND MARKER: Pins exactly to the slider date
-                fig.add_trace(go.Scatter(
-                    x=[a['curr_date']], 
-                    y=[a['curr']], 
-                    mode='markers', 
-                    marker=dict(color='#ff4b4b', size=12, symbol='diamond', line=dict(width=2, color='white')),
-                    name="Selection"
-                ))
-                
-                # Axis Labeling
-                fig.update_layout(
-                    height=200, margin=dict(l=10,r=10,t=10,b=10),
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                    showlegend=False,
-                    xaxis=dict(title="Year", title_font=dict(size=10, color="#8b949e"), showgrid=False, tickfont=dict(size=8, color="#8b949e")),
-                    yaxis=dict(title="Ratio Value", title_font=dict(size=10, color="#8b949e"), showgrid=True, gridcolor="#30363d", tickfont=dict(size=8, color="#8b949e"))
-                )
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
