@@ -2,7 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
+import requests
+import io
+import time
 
 # 1. PAGE SETUP
 st.set_page_config(page_title="Macro Ratio Simulator", layout="wide", initial_sidebar_state="collapsed")
@@ -19,35 +21,34 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. ROBUST DATA ENGINE (Replaced yfinance with a cleaner implementation)
+# 2. RAW DATA ENGINE (Bypasses all library errors)
 @st.cache_data(ttl=3600)
-def fetch_market_data():
-    import yfinance as yf # Import inside to isolate
+def fetch_raw_data():
     tickers = {
         "Silver": "SI=F", "Platinum": "PL=F", "Copper": "HG=F",
         "S&P 500": "ES=F", "Miners": "GDXJ", "Oil": "CL=F", 
         "Bitcoin": "BTC-USD", "Gold": "GC=F"
     }
     data_dict = {}
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
     for name, sym in tickers.items():
         try:
-            # Note: We use a specific period to ensure no build-dependency issues
-            df = yf.download(sym, period="max", interval="1wk", progress=False)
-            if not df.empty:
-                # Handle potential multi-index columns from yfinance
-                if isinstance(df['Close'], pd.DataFrame):
-                    data_dict[name] = df['Close'].iloc[:, 0]
-                else:
-                    data_dict[name] = df['Close']
-        except Exception: continue
+            # Direct CSV fetch to bypass library build issues
+            url = f"https://query1.finance.yahoo.com/v7/finance/download/{sym}?period1=0&period2={int(time.time())}&interval=1wk&events=history"
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                df = pd.read_csv(io.StringIO(response.text), index_col='Date', parse_dates=True)
+                data_dict[name] = df['Close']
+        except: continue
     
     if not data_dict: return pd.DataFrame()
     return pd.concat(data_dict.values(), axis=1, keys=data_dict.keys()).dropna()
 
-full_history = fetch_market_data()
+full_history = fetch_raw_data()
 
 if full_history.empty:
-    st.error("Wait! The data engine is blocked by the environment. Please check your internet connection or try again in a moment.")
+    st.error("Environment block detected. Direct API fetch failed.")
     st.stop()
 
 # 3. GLOBAL CONTROLS
@@ -107,7 +108,7 @@ row1, row2 = sorted_assets[:4], sorted_assets[4:]
 for row in [row1, row2]:
     cols = st.columns(len(row))
     for i, a in enumerate(row):
-        # 10% Zone Logic
+        # 10% Zone Logic (Score >= 0.90)
         is_buy = a['buy_score'] >= 0.90
         is_sell = a['sell_score'] >= 0.90
         
@@ -123,10 +124,21 @@ for row in [row1, row2]:
                 <h2 style="margin:10px 0; color:#ffffff;">{a['curr']:.2f}</h2>
                 <div style="font-size: 0.75em; font-weight: bold; color: {accent}; margin-bottom: 10px;">{status}</div>
                 <hr style="border-top: 1px solid {accent}; opacity: 0.3; margin: 10px 0;">
-                <p style="font-size: 0.7em; color: #f8fafc; opacity: 0.7;">
-                    Value Rank: {a['buy_score']:.0%}<br>
-                    Strategy Mean: {a['mean']:.2f}
+                <p style="font-size: 0.75em; color: #f8fafc; opacity: 0.9;">
+                    <b>Value Rank: {a['buy_score']:.0%}</b><br>
+                    <span style="font-size: 0.8em; opacity: 0.7;">30Y Mean: {a['mean']:.2f}</span>
                 </p>
                 <a href="https://www.tradingview.com/chart/?symbol={tv_map[a['name']]}" target="_blank" style="color:#ffffff; text-decoration:none; font-size:0.8em; font-weight:bold; border-bottom: 1px solid white;">Technicals ↗</a>
             </div>
             """, unsafe_allow_html=True)
+            
+            with st.expander("History"):
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=a['total_ratios'].index, y=a['total_ratios'].values, name="Full", line=dict(color='rgba(255,255,255,0.1)', width=1)))
+                active = a['total_ratios'].loc[:a['curr_date']]
+                fig.add_trace(go.Scatter(x=active.index, y=active.values, name="Active", line=dict(color=accent, width=2)))
+                fig.add_trace(go.Scatter(x=[a['curr_date']], y=[a['curr']], mode='markers', marker=dict(color='#ff4b4b', size=12, symbol='diamond')))
+                fig.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+                fig.update_xaxes(showgrid=False, tickfont=dict(size=8, color="#8b949e"), title="Weekly Data")
+                fig.update_yaxes(showgrid=True, gridcolor="#30363d", tickfont=dict(size=8, color="#8b949e"), title="Ratio")
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
